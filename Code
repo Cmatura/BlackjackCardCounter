@@ -1,0 +1,381 @@
+import tkinter as tk
+
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip = None
+        self.widget.bind("<Enter>", self.display_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+
+    def display_tooltip(self, event=None):
+        x, y, _, _ = self.widget.bbox("insert")
+        x += self.widget.winfo_rootx() + 25
+        y += self.widget.winfo_rooty() + 25
+        self.tooltip = tk.Toplevel(self.widget)
+        self.tooltip.wm_overrideredirect(True)
+        self.tooltip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(self.tooltip, text=self.text, justify='left', background='lightyellow', relief='solid',
+                         borderwidth=1, font=("Arial", "10", "normal"))
+        label.pack(ipadx=5, ipady=3)
+
+    def hide_tooltip(self, event=None):
+        if self.tooltip:
+            self.tooltip.destroy()
+
+class BlackjackCardCounter:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Blackjack Card Counter")
+        self.root.bind('<KeyPress>', self.key_press_handler)
+
+        self.num_decks = tk.StringVar()
+        self.player_cards = [tk.StringVar() for _ in range(6)]
+        self.dealer_card = tk.StringVar()
+        self.player_hand_total = tk.StringVar()
+        self.safe_percentage = tk.StringVar(value="Safe Odds: 0.00%")
+        self.percent_mode = tk.StringVar(value="Safe")
+        self.card_appearance = tk.StringVar(value="Spades")  # Add variable to track card appearance
+
+        self.count = 0
+
+        self.card_counts = {
+            'A': 4, '2': 4, '3': 4, '4': 4, '5': 4, '6': 4, '7': 4, '8': 4, '9': 4, '10': 4, 'J': 4, 'Q': 4, 'K': 4
+        }
+
+        self.percent_labels = {}
+        self.count_labels = {}
+        self.card_canvases = {}
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        canvas = tk.Canvas(self.root)
+        scrollbar = tk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
+        scrollbar.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+
+        frame = tk.Frame(canvas)
+        canvas.create_window((0, 0), window=frame, anchor="nw")
+
+        frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        frame.bind("<MouseWheel>", lambda event: canvas.yview_scroll(-1 * (event.delta // 120), "units"))
+
+        self.add_widgets_to_frame(frame)
+
+    def add_widgets_to_frame(self, frame):
+        user_hand_title = tk.Label(frame, text="User's Hand")
+        user_hand_title.grid(row=0, column=0, columnspan=4, padx=10, pady=5)
+
+        decks_label = tk.Label(frame, text="Number of Decks:")
+        decks_label.grid(row=1, column=0, padx=10, pady=5)
+        decks_dropdown = tk.OptionMenu(frame, self.num_decks, *range(1, 9), command=self.update_deck)
+        self.num_decks.set(1)
+        decks_dropdown.grid(row=1, column=1, padx=10, pady=5)
+
+        player_label = tk.Label(frame, text="Player's Hand:")
+        player_label.grid(row=2, column=0, padx=10, pady=5)
+        self.player_dropdowns = []
+        for i in range(6):
+            dropdown = tk.OptionMenu(frame, self.player_cards[i], '-', *self.card_counts.keys(),
+                                     command=lambda x, index=i: self.update_card_count(x, index))
+            dropdown.grid(row=2, column=i + 1, padx=10, pady=5)
+            self.player_dropdowns.append(dropdown)
+
+        self.new_hand_button = tk.Button(frame, text="New Hand", command=self.new_hand)
+        self.new_hand_button.grid(row=1, column=2, padx=10, pady=5)
+
+        player_hand_total_label = tk.Label(frame, textvariable=self.player_hand_total)
+        player_hand_total_label.grid(row=3, column=0, columnspan=4, padx=10, pady=5)
+
+        safe_label = tk.Label(frame, textvariable=self.safe_percentage)
+        safe_label.grid(row=3, column=4, columnspan=2, padx=10, pady=5)
+        safe_label.bind("<Button-1>", self.toggle_percentage_mode)
+
+        separator_line = tk.Frame(frame, height=2, bd=1, relief=tk.SUNKEN)
+        separator_line.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=5)
+
+        deck_title = tk.Label(frame, text="Deck Composition")
+        deck_title.grid(row=5, column=0, columnspan=6, padx=10, pady=5)
+
+        reset_button = tk.Button(frame, text="Reset", command=self.reset)
+        reset_button.grid(row=6, column=1, padx=10, pady=5)
+
+        self.count_label = tk.Label(frame, text="Count: 0")
+        self.count_label.grid(row=6, column=2, padx=10, pady=5)
+        tooltip_text = "2-6 = +1\n7-9 = 0\n10-Ace = -1" # Displays the rules of the "Count" feature if hovered over
+        self.tooltip = ToolTip(self.count_label, tooltip_text)
+
+        # Add the card appearance dropdown
+        appearance_label = tk.Label(frame, text="Card Appearance:")
+        appearance_label.grid(row=6, column=3, padx=10, pady=5)
+        appearance_dropdown = tk.OptionMenu(frame, self.card_appearance, "Spades", "Hearts", "Diamonds", "Clubs",
+                                            command=self.update_card_appearance)
+        appearance_dropdown.grid(row=6, column=4, padx=10, pady=5)
+
+        self.display_cards(frame)
+        self.update_counts()
+
+        dealer_hand_title = tk.Label(frame, text="Dealer's Hand")
+        dealer_hand_title.grid(row=0, column=8, columnspan=4, padx=10, pady=5)
+
+        reset_dealer_button = tk.Button(frame, text="Dealer Reset", command=self.reset_dealer_hand)
+        reset_dealer_button.grid(row=1, column=8, padx=10, pady=5)
+
+        dealer_card_label = tk.Label(frame, text="Dealer's Card:")
+        dealer_card_label.grid(row=2, column=8, padx=10, pady=5)
+
+        dealer_dropdown = tk.OptionMenu(frame, self.dealer_card, '-', *self.card_counts.keys(),
+                                        command=self.update_dealer_card)
+        dealer_dropdown.grid(row=2, column=9, padx=10, pady=5)
+
+    def display_cards(self, frame):
+        row = 7
+        col = 0
+        total_cards = len(self.card_counts) * int(self.num_decks.get()) * 4
+        card_width = 100
+        card_height = 150
+        self.count_labels = {}
+        self.percent_labels = {}
+        cards_in_first_row = 7
+        cards_in_second_row = total_cards - cards_in_first_row
+        card_symbols = {
+            'A': '🂡', '2': '🂢', '3': '🂣', '4': '🂤', '5': '🂥', '6': '🂦', '7': '🂧',
+            '8': '🂨', '9': '🂩', '10': '🂪', 'J': '🂫', 'Q': '🂭', 'K': '🂮'
+        } # Default card symbols
+        font_size = 72 * 1.2 # Size of the cards
+        for card, count in self.card_counts.items():
+            if col >= cards_in_first_row:
+                row += 3
+                col = 0
+            card_canvas = tk.Canvas(frame, width=card_width, height=card_height)
+            card_canvas.grid(row=row, column=col, padx=5, pady=5)
+            card_symbol = card_symbols[card]
+            card_canvas.create_text(card_width / 2, card_height / 2, text=card_symbol, font=("Arial", int(font_size)))
+            self.card_canvases[card] = card_canvas
+            self.count_labels[card] = tk.Label(frame, text=f"Count: {count}")
+            self.count_labels[card].grid(row=row + 1, column=col, padx=5, pady=5)
+            self.percent_labels[card] = tk.Label(frame, text=f"%: {100 / total_cards * count:.2f}")
+            self.percent_labels[card].grid(row=row + 2, column=col, padx=5, pady=5)
+            card_canvas.bind("<Button-1>", lambda event, c=card, index=row: self.update_card_count(c, index))
+            col += 1
+
+    def new_hand(self):
+        for i in range(6):
+            self.player_cards[i].set('-') #Resets the cards dropdowns to blank
+
+        self.player_hand_total.set(0) #Resets the User's Hand Total
+        self.update_safe_percentage() #Resets the User's % to hit safely
+
+    def update_card_count(self, card, index):
+        if card != '-':
+            current_count = self.card_counts[card]
+            if current_count > 0:
+                self.card_counts[card] -= 1
+                self.count_labels[card].config(text=f"Count: {self.card_counts[card]}")
+                self.update_percentages()
+                self.update_counts()
+                self.update_count_tracker(card)
+            self.update_player_hand_total()
+            self.update_safe_percentage()
+
+    def reset(self):
+        for card in self.card_counts:
+            self.card_counts[card] = 4 * int(self.num_decks.get())
+            self.count_labels[card].config(text=f"Count: {self.card_counts[card]}")
+
+        for i in range(6): #Resets all 6 dropdowns
+            self.player_cards[i].set('-')
+
+        self.player_hand_total.set(0) #This line and below resets all live counts back to the default
+        self.update_percentages()
+        self.count = 0
+        self.update_count_label()
+        self.dealer_card.set('-')
+
+        self.update_safe_percentage()
+
+    def update_counts(self, *args):
+        total_cards = sum(self.card_counts.values())
+        for card in self.card_counts:
+            self.count_labels[card].config(text=f"Count: {self.card_counts[card]}")
+            self.percent_labels[card].config(text=f"%: {(self.card_counts[card] / total_cards) * 100:.2f}")
+
+    def update_percentages(self):
+        total_cards = sum(self.card_counts.values())
+        for card, count in self.card_counts.items():
+            self.percent_labels[card].config(text=f"%: {(count / total_cards) * 100:.2f}")
+
+    def update_player_hand_total(self):
+        cards_values = {'A': [1, 11], '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10,
+                        'Q': 10, 'K': 10}
+        total_value_low = 0
+        total_value_high = 0
+        ace_count = 0
+
+        for card in self.player_cards:
+            if card.get() and card.get() != '-':
+                if card.get() == 'A':
+                    ace_count += 1
+                else:
+                    total_value_low += cards_values[card.get()] if isinstance(cards_values[card.get()], int) else \
+                        cards_values[card.get()][0]
+                    total_value_high += cards_values[card.get()] if isinstance(cards_values[card.get()], int) else \
+                        cards_values[card.get()][1]
+
+        total_value_high = total_value_low + ace_count * 11
+        total_value_low += ace_count
+
+        while total_value_high > 21 and ace_count > 0:
+            total_value_high -= 10
+            ace_count -= 1
+
+        if ace_count > 0:
+            self.player_hand_total.set(f"{total_value_low}/{total_value_high}")
+        else:
+            self.player_hand_total.set(total_value_low)
+
+        self.update_safe_percentage()
+
+    def update_deck(self, *args):
+        self.count = 0
+        self.update_count_label()
+
+        for i in range(6): #Changing the deck number resets cards back to default along with all other values
+            self.player_cards[i].set('-')
+
+        self.player_hand_total.set(0)
+        self.dealer_card.set('-')
+
+        for card in self.card_counts:
+            self.card_counts[card] = 4 * int(self.num_decks.get())
+            self.count_labels[card].config(text=f"Count: {self.card_counts[card]}")
+
+        self.update_counts()
+        self.update_percentages()
+        self.update_safe_percentage()
+
+    def update_dealer_card(self, card):
+        if card != '-':
+            if self.card_counts[card] > 0:
+                self.card_counts[card] -= 1
+                self.count_labels[card].config(text=f"Count: {self.card_counts[card]}")
+                self.update_percentages()
+                self.update_counts()
+                self.update_count_tracker(card)
+
+        self.dealer_card.set(card)
+        self.update_player_hand_total()
+        self.update_safe_percentage()
+
+    def update_count_tracker(self, card):
+        if card in ['2', '3', '4', '5', '6']:
+            self.count += 1
+        elif card in ['10', 'J', 'Q', 'K', 'A']:
+            self.count -= 1
+        self.update_count_label()
+
+    def update_count_label(self):
+        self.count_label.config(text=f"Count: {self.count}")
+
+    def key_press_handler(self, event): #Added keyboard support for decrementing cards
+        key_to_card = {'1': 'A', '2': '2', '3': '3', '4': '4', '5': '5', '6': '6', '7': '7', '8': '8', '9': '9',
+                       '0': '10',
+                       'A': 'A', 'J': 'J', 'Q': 'Q', 'K': 'K',
+                       '!': 'A', '@': '2', '#': '3', '$': '4', '%': '5', '^': '6', '&': '7', '*': '8', '(': '9',
+                       ')': '10', 'J': 'J', 'Q': 'Q', 'K': 'K'}
+
+        card = key_to_card.get(event.char.upper())
+
+        if card and self.card_counts[card] > 0:
+            self.card_counts[card] -= 1
+            self.count_labels[card].config(text=f"Count: {self.card_counts[card]}")
+            self.update_percentages()
+            self.update_safe_percentage()
+
+    def reset_dealer_hand(self): #Only resets the dealer's values
+        self.dealer_card.set('-')
+        self.update_player_hand_total()
+        self.update_safe_percentage()
+
+    def toggle_percentage_mode(self, event=None):
+        current_mode = self.percent_mode.get()
+        if current_mode == "Safe":
+            self.percent_mode.set("Bust")
+            self.update_bust_percentage()
+        elif current_mode == "Bust":
+            self.percent_mode.set("Safe")
+            self.update_safe_percentage()
+
+    def update_safe_percentage(self):
+        if not self.player_hand_total.get():
+            return
+
+        total_safe_chance = 0
+        total_cards = sum(self.card_counts.values())
+        cards_values = {'A': [1, 11], '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10,
+                        'Q': 10, 'K': 10}
+
+        for card, count in self.card_counts.items():
+            if count == 0:
+                continue
+            card_value = cards_values[card] if isinstance(cards_values[card], int) else cards_values[card][0]
+            if int(self.player_hand_total.get()) + card_value <= 21:
+                total_safe_chance += count
+
+        safe_percentage = (total_safe_chance / total_cards) * 100 if total_cards > 0 else 0
+        self.safe_percentage.set(f"Safe Odds: {safe_percentage:.2f}%")
+
+    def update_bust_percentage(self):
+        if not self.player_hand_total.get():
+            return
+
+        total_bust_chance = 0
+        total_cards = sum(self.card_counts.values())
+        cards_values = {'A': [1, 11], '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10, 'J': 10,
+                        'Q': 10, 'K': 10}
+
+        for card, count in self.card_counts.items():
+            if count == 0:
+                continue
+            card_value = cards_values[card] if isinstance(cards_values[card], int) else cards_values[card][0]
+            if int(self.player_hand_total.get()) + card_value > 21:
+                total_bust_chance += count
+
+        bust_percentage = (total_bust_chance / total_cards) * 100 if total_cards > 0 else 0
+        self.safe_percentage.set(f"Bust Odds: {bust_percentage:.2f}%")
+
+    def update_card_appearance(self, appearance): #Optional user interface quality of life
+        if appearance == "Hearts":
+            self.card_symbols = {
+                'A': '🂱', '2': '🂲', '3': '🂳', '4': '🂴', '5': '🂵', '6': '🂶', '7': '🂷', '8': '🂸', '9': '🂹', '10': '🂺',
+                'J': '🂻', 'Q': '🂽', 'K': '🂾'
+            }
+        elif appearance == "Diamonds":
+            self.card_symbols = {
+                'A': '🃁', '2': '🃂', '3': '🃃', '4': '🃄', '5': '🃅', '6': '🃆', '7': '🃇', '8': '🃈', '9': '🃉', '10': '🃊',
+                'J': '🃋', 'Q': '🃍', 'K': '🃎'
+            }
+        elif appearance == "Clubs":
+            self.card_symbols = {
+                'A': '🃑', '2': '🃒', '3': '🃓', '4': '🃔', '5': '🃕', '6': '🃖', '7': '🃗', '8': '🃘', '9': '🃙', '10': '🃚',
+                'J': '🃛', 'Q': '🃝', 'K': '🃞'
+            }
+        else:  # Default to Spades
+            self.card_symbols = {
+                'A': '🂡', '2': '🂢', '3': '🂣', '4': '🂤', '5': '🂥', '6': '🂦', '7': '🂧', '8': '🂨', '9': '🂩', '10': '🂪',
+                'J': '🂫', 'Q': '🂭', 'K': '🂮'
+            }
+
+        self.update_card_icons()
+
+    def update_card_icons(self):
+        for card, symbol in self.card_symbols.items():
+            self.card_canvases[card].delete("all")
+            self.card_canvases[card].create_text(50, 75, text=symbol, font=("Arial", 86))
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = BlackjackCardCounter(root)
+    root.mainloop()
